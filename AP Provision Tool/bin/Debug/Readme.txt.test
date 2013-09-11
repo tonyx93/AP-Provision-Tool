@@ -1,0 +1,41 @@
+AP Provision Tool Readme
+
+Authors: Mei (Mike) Liu and Tony Xu
+
+Purpose:
+All-in-one application to configure and check APs
+
+Installation:
+1. Double click setup.exe and follow the dialog prompts
+
+Functionality:
+
+- Accepts a list of ap names in a *.txt file
+- Manually enter group
+- May manually enter name or select from list
+- Configures AP with provided information in textbox fields
+- Checks AP and returns information in info box
+- Adds to database on click
+- Console display for monitoring progress
+
+To do:
+
+- Add button to purge AP
+- Add multithreading support (maybe)
+...
+
+Note: Only supports serial connection to ARUBA Networks APs
+
+Release Notes:
+
+Version 1.0.0.11
+- Cleaned up code
+- Added error checking
+	- Code will now check for missing characters during configuration
+	  and attempt to fix them
+- Added console box for easier trouble shooting
+- Cleaned up GUI
+- Cleaned up exception handling
+
+Version 1.0.0.9
+- Initial Release

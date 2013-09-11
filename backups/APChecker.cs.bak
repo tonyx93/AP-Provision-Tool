@@ -1,0 +1,519 @@
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.Data;
+using System.Drawing;
+using System.Linq;
+using System.Text;
+using System.Windows.Forms;
+using System.IO;
+using System.IO.Ports;
+using System.Timers;
+using System.Diagnostics;
+using System.Net;
+
+
+namespace WindowsFormsApplication1
+{
+    public partial class Form1 : Form
+    {
+        // Global Variables
+        public string mac = "", apname = "", group = "", username = "", password = "";
+        public bool havemac = false, haveapname = false, havegroup= false,
+            haveuser = false, havepass = false, havevars = false, havefile = false;
+        Stopwatch sw = new Stopwatch(); // Initialize stopwatch timer
+        
+        public Form1()
+        {
+            InitializeComponent();
+        }
+
+        // To do: Clean up
+        // Redesign using threads (May never happen)
+        // Optimize Code using private functions
+
+        private void InitializeVars() // Function to reinitialize Global Vars
+        {
+            mac = ""; apname = ""; group = "";
+            havemac = false; haveapname = false;
+            havegroup = false; havevars = false;
+        }
+
+        private void CheckButton_Click(object sender, EventArgs e) // Extracts AP MAC, Name, and group
+        {
+            InitializeVars(); // Reset global variables
+
+            // Variables
+            byte[] sigint = new byte[1]; // Interrupt signal byte
+            sigint[0] = 0x03;
+            string line = ""; // line variable used to read in from serial port stream
+            SerialPort sp = new SerialPort("COM1",9600); // Initialize Serial port communications
+            sp.ReadTimeout = 5000;
+            sp.WriteTimeout = 2000;
+
+            toolStripStatusLabel1.Text = "Accessing AP";
+            try // to open serial port
+            {
+                sp.Open();
+            }
+            catch (UnauthorizedAccessException uae)
+            {
+                MessageBox.Show("Port is currently being used by another process");
+            }
+
+            try // send sigint until command line
+            {
+                while (true)
+                {
+                    sp.Write(sigint, 0, 1);
+                    if (line.Contains("apboot") || line.Contains("INTERRUPT"))
+                    {
+                        break;
+                    }
+                    line = sp.ReadLine();
+                }
+            }
+            catch (TimeoutException te) // catches end of stream timeout exception from ReadLine()
+            {
+                MessageBox.Show("Could not access AP, please ensure AP is connected and try again");
+                toolStripStatusLabel1.Text = "Please ensure AP is connected and try again";
+                sp.Close();
+                return;
+            }
+
+            sw.Start();
+            while (!line.Contains("=") && sw.ElapsedMilliseconds < 5000) // repeats write of printenv in case beginning byte is cut off
+            {
+                try
+                {
+                    line = sp.ReadLine();
+                }
+                catch (TimeoutException te)
+                {
+                    sp.WriteLine("printenv");
+                }
+            }
+            sw.Reset();
+
+            while (apname == "" || mac == "" || group == "") // retrieves information from printenv
+            {
+                if (line.StartsWith("name="))
+                {
+                    apname = line.Substring(5);
+                    haveapname = true;
+                }
+                else if (line.StartsWith("ethaddr="))
+                {
+                    mac = line.Substring(8);
+                    havemac = true;
+                }
+                else if (line.StartsWith("group="))
+                {
+                    group = line.Substring(6);
+                    havegroup = true;
+                }
+                try
+                {
+                    line = sp.ReadLine();
+                }
+                catch (TimeoutException te) {
+                    if (mac == "")
+                    {
+                        MessageBox.Show("No mac address could be found, please try again");
+                        toolStripStatusLabel1.Text = "No mac address could be found, please try again";
+                    }
+                    else if (apname == "")
+                    {
+                        MessageBox.Show("No name could be found, please try again");
+                        toolStripStatusLabel1.Text = "No name could be found, please try again";
+                    }
+                    else if (group == "")
+                    {
+                        MessageBox.Show("No group could be found");
+                        toolStripStatusLabel1.Text = "No group could be found";
+                    }
+                    else
+                    {
+                        MessageBox.Show("Unknown error occurred, please try again");
+                        toolStripStatusLabel1.Text = "Unknown error occurred, please try again";
+                    }
+                    break;
+                }
+            }
+
+            if (havemac && haveapname) // output findings to textbox
+            {
+                infobox.Text = "MAC = " + mac + "\nNAME = " + apname + "\nGROUP= " + group;
+                toolStripStatusLabel1.Text = "AP information acquired!";
+            }
+            else
+            {
+                toolStripStatusLabel1.Text = "Acquisition failed, please check AP connection or configuration and try again";
+            }
+            sp.Close(); // close serial port
+        }
+
+        private void Username_TextChanged(object sender, EventArgs e) // retrieve username
+        {
+            username = Username.Text;
+            if (username != "")
+            {
+                haveuser = true;
+            }
+        }
+
+        private void Password_TextChanged(object sender, EventArgs e) // retrieve password
+        {
+            password = Password.Text;
+            if (password != "")
+            {
+                havepass = true;
+            }
+        }
+
+        private void AddButton_Click(object sender, EventArgs e) // sends pre-formatted string to provision.php
+        {
+            
+            CheckVars(); // checks if all variables acquired
+            if (havevars == true)
+            {
+                toolStripStatusLabel1.Text = "Authenticating";
+                // Open web request
+                HttpWebRequest webreq =
+                    (HttpWebRequest)WebRequest.Create("https://netcenter.studentaffairs.ohio-state.edu/approvisioner/provisioner.php");
+
+                // encodes data as byte
+                ASCIIEncoding dataenc = new ASCIIEncoding();
+                string postData = "user=" + username;
+                postData += "&pass=" + password + "&mac=" + mac + "&name=" + apname;
+                byte[] data = dataenc.GetBytes(postData);
+
+                // Sets web request variables
+                webreq.Method = "POST";
+                webreq.ContentType = "application/x-www-form-urlencoded";
+                webreq.ContentLength = data.Length;
+
+                // open stream from web request server
+                Stream dataStream = webreq.GetRequestStream();
+                dataStream.Write(data, 0, data.Length);
+                dataStream.Close();
+
+                // reads response
+                WebResponse response = webreq.GetResponse();
+                //  MessageBox.Show(((HttpWebResponse)response).StatusDescription);
+                dataStream = response.GetResponseStream();
+                StreamReader reader = new StreamReader(dataStream);
+                string responseFromServer = reader.ReadToEnd();
+                if (responseFromServer != "")
+                {
+                    MessageBox.Show(responseFromServer);
+                    toolStripStatusLabel1.Text = responseFromServer;
+                }
+                else
+                {
+                    toolStripStatusLabel1.Text = "Add succeeded!";
+                }
+
+                //Close streams
+                reader.Close();
+                dataStream.Close();
+                response.Close();
+            }
+        }
+
+        private void CheckVars() // Checks variable acquisition
+        {
+            if (username == "")
+            {
+                MessageBox.Show("No username entered");
+            }
+            else if (password == "")
+            {
+                MessageBox.Show("No password entered");
+            }
+            else if (mac == "")
+            {
+                MessageBox.Show("No MAC acquired");
+            }
+            else if (apname == "")
+            {
+                MessageBox.Show("No AP name acquired");
+            }
+            else
+            {
+                havevars = true;
+            }
+        }
+
+        private void toolStripStatusLabel1_Click(object sender, EventArgs e) // Click on status bar pops up messagebox in case message is too long
+        {
+            MessageBox.Show(toolStripStatusLabel1.Text);
+        }
+
+        private void configure_Click(object sender, EventArgs e) // Function to perform when Configure button is pressed
+        {
+            // Variables
+            string cmd = "", line = "";
+            byte[] sigint = new byte[1]; // interrupt signal byte
+            sigint[0] = 0x03;
+            SerialPort sp = new SerialPort("COM1", 9600);
+            sp.ReadTimeout = 5000;
+            sp.WriteTimeout = 2000;
+
+            if (haveapname)
+            {
+
+                toolStripStatusLabel1.Text = "Waiting on connection...";
+                try // accessing serial port
+                {
+                    sp.Open();
+                }
+                catch (UnauthorizedAccessException uae)
+                {
+                    toolStripStatusLabel1.Text = "Access is denied to port. Try again";
+                    MessageBox.Show("Port error: " + uae.Message);
+                }
+
+                try // send sigint until command line
+                {
+                    while (true)
+                    {
+                        sp.Write(sigint, 0, 1);
+                        if (line.Contains("apboot") || line.Contains("INTERRUPT"))
+                        {
+                            break;
+                        }
+                        line = sp.ReadLine();
+                        consolebox.Text += line + "\n";
+                    }
+                }
+                catch (TimeoutException te) // catches end of stream timeout exception from ReadLine()
+                {
+                    MessageBox.Show("Could not access AP, please ensure AP is connected");
+                    toolStripStatusLabel1.Text = "Please ensure AP is connected and try again";
+                    sp.Close();
+                    return;
+                }
+
+                // configure AP
+                int iteration = 0;
+                Stopwatch sw2 = new Stopwatch();
+                sw2.Start();
+                while (!apname.Contains(AP_Name.Text) || !group.Contains(apgroup.Text) || iteration < 1)
+                {
+                    toolStripStatusLabel1.Text = "Configuring AP...";
+                    try // to send purge successfully
+                    {
+                        sp.WriteLine("purgeenv;");
+                        while (true)
+                        {
+                            line = sp.ReadLine();
+                            consolebox.Text += line + "\n";
+                            if (line.Contains("purgeenv"))
+                            {
+                                break;
+                            }
+                            else
+                            {
+                                sp.WriteLine("purgeenv;");
+                            }
+                        }
+                    }
+                    catch (TimeoutException te)
+                    {
+                        continue;
+                    }
+                    sw.Start();
+                    while (sw.ElapsedMilliseconds < 2000)
+                    {
+                        try
+                        {
+                            line = sp.ReadLine();
+                            consolebox.Text += line + "\n";
+                        }
+                        catch (TimeoutException te)
+                        {
+                            continue;
+                        }
+                    }
+                    sw.Reset();
+                    sw.Start();
+                    while (sw.ElapsedMilliseconds < 3000)
+                    {
+                        try
+                        {
+                            line = sp.ReadLine();
+                            consolebox.Text += line + "\n";
+                        }
+                        catch (TimeoutException te)
+                        {
+                            continue;
+                        }
+                    }
+                    sw.Reset();
+
+                    cmd = "setenv name " + AP_Name.Text + ";setenv group " + apgroup.Text + ";save;";
+                    sp.WriteLine(cmd);
+                    sw.Start(); // Wait X seconds after saving and purging
+                    while (sw.ElapsedMilliseconds < 5000)
+                    {
+                        try
+                        {
+                            line = sp.ReadLine();
+                            consolebox.Text += line + "\n";
+                        }
+                        catch (TimeoutException te)
+                        {
+                            continue;
+                        }
+                    }
+                    sw.Reset();
+
+                    sw.Start();
+                    sp.WriteLine("printenv");
+                    while (!line.Contains("=") && sw.ElapsedMilliseconds < 5000) // repeats write of printenv in case beginning byte is cut off
+                    {
+                        try
+                        {
+                            line = sp.ReadLine();
+                            consolebox.Text += line + "\n";
+                        }
+                        catch (TimeoutException te)
+                        {
+                            sp.WriteLine("printenv");
+                        }
+                    }
+                    sw.Reset();
+
+                    InitializeVars();
+
+                    while (apname == "" || group == "") // retrieves information from printenv
+                    {
+                        if (sw2.ElapsedMilliseconds > 30000)
+                        {
+                            MessageBox.Show("Configuration failed, please try again. If problem persists please contact the Author");
+                            break;
+                        }
+                        if (line.StartsWith("name="))
+                        {
+                            apname = line.Substring(5);
+                            haveapname = true;
+                        }
+                        else if (line.StartsWith("group="))
+                        {
+                            group = line.Substring(6);
+                            havegroup = true;
+                        }
+                        try
+                        {
+                            line = sp.ReadLine();
+                            consolebox.Text += line + "\n";
+                        }
+                        catch (TimeoutException te)
+                        {
+                            // No longer necessary with error checking
+                            //if (apname == "")
+                            //{
+                            //    MessageBox.Show("No name could be found, please try again");
+                            //    toolStripStatusLabel1.Text = "No name could be found, please try again";
+                            //}
+                            //else if (group == "")
+                            //{
+                            //    MessageBox.Show("Group name not found");
+                            //    toolStripStatusLabel1.Text = "Group name not found";
+                            //}
+                            //else
+                            //{
+                            //    MessageBox.Show("Unknown error occurred, please try again");
+                            //    toolStripStatusLabel1.Text = "Unknown error occurred, please try again";
+                            //}
+                            //break;
+                        }
+                    }
+                    iteration++;
+                }
+                sw2.Reset();
+
+                if (haveapname == true)
+                {
+                    MessageBox.Show("AP configured!\nname=" + apname + "\ngroup=" + group);
+                    toolStripStatusLabel1.Text = "Done!";
+                }
+
+                sp.Close();
+                if (havefile == true && (apnames.SelectedItem.ToString() == AP_Name.Text || AP_Name.Text == ""))
+                {
+                    try // advance listbox selection by 1
+                    {
+                        apnames.SelectedIndex += 1;
+                    }
+                    catch (ArgumentOutOfRangeException aoore)
+                    {
+                        apnames.SelectedIndex = 0; // reset list to top
+                    }
+                }
+            }
+            else
+            {
+                MessageBox.Show("No name entered!");
+                toolStripStatusLabel1.Text = "Please Enter an AP Name";
+            }
+
+        }
+
+        private void csource_Click(object sender, EventArgs e) // function for Browse button
+        {
+            // opens file browser dialog
+            apnames.Items.Clear();
+            fchoice.ShowDialog();
+        }
+
+
+        private void openFileDialog1_FileOk_1(object sender, CancelEventArgs e) // reads in file from file browser
+        {
+            try
+            {
+                StreamReader stream = new StreamReader(fchoice.OpenFile());
+                while (!stream.EndOfStream) // add apnames to list
+                {
+                    string line = stream.ReadLine();
+                    apnames.Items.Add(line);
+                }
+                apnames.SelectedIndex++; // set selected item to first one in the list
+                AP_Name.Text = apnames.SelectedItem.ToString();
+                toolStripStatusLabel1.Text = "Ready";
+                havefile = true;
+                haveapname = true;
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("File open error: " + ex.Message);
+                havefile = false;
+            }
+        }
+
+        private void textBox2_TextChanged(object sender, EventArgs e)
+        {
+            apname = AP_Name.Text;
+            if (AP_Name.Text != "")
+            {
+                haveapname = true;
+            }
+        }
+
+        private void apnames_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            apname = apnames.SelectedItem.ToString();
+            if (havefile == true)
+            {
+                AP_Name.Text = apnames.SelectedItem.ToString();
+                haveapname = true;
+            }
+        }
+
+        private void apgroup_TextChanged(object sender, EventArgs e)
+        {
+            group = apgroup.Text;
+        }
+    }
+}
